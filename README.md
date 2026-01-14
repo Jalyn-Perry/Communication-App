@@ -9,11 +9,11 @@ Allows two users to send and receive messages in real-time over a local network 
 
 ## Features
 
-- Real-time chat between two users
-- Separate **send** and **receive** threads for smooth messaging
+- Real-time GUI chat between two users
+- Separate **send** and **receive** functions for smooth messaging
 - Simple command handling:
   - Type `exit` to close the connection gracefully
-- Easy server/client setup via terminal
+- Easy server/client setup via GUI
 
 ---
 
