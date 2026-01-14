@@ -1,114 +1,124 @@
 import socket
-import threading
-import rsa
 import sys
+import threading
+import tkinter as tk
+from tkinter import simpledialog
+stop_event = threading.Event()
 
-"""
-TODO
-Usernames/Nicknames: Allow users to set a username so messages display as username: message instead of just "You" or "partner".
-Command Support: Implement special commands like /exit to leave the chat, /clear to clear the screen, or /help for a list of commands.
-Timestamps: Display timestamps for messages.
-File sending
-"""
+######################################
+#Creating a main window at the start
+######################################
 
-### act 1
+# Note to self:
+# We start the main window and make very other window a child of it 
+# This is best practice and ensures that when the main window dies so does the child windows 
+# For example see line 23   (choice = simpledialog.askstring("Chat", "Host or connect? (1/2)", parent=mainWindow))
+mainWindow = tk.Tk()
+mainWindow.title('Chat')
+mainWindow.withdraw()       #hides mainWindow
 
-"""
-how communication works
-Server Setup:
 
-When the server part of the code is run (by choosing option 1), it creates a TCP socket, binds it to the specified IP (you can use 127.0.0.1 for the local machine), and starts listening for incoming connections on port 1122.
-Client Setup:
+#Initializing socket & network connections
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+choice = simpledialog.askstring("Chat", "Host or connect? (1/2)", parent=mainWindow)
 
-When the client part of the code is run (by choosing option 2), it creates another TCP socket and connects to the specified IP and port (127.0.0.1:1122).
-Two Different Windows:
-
-Run the program in two separate terminal or command windows.
-In one window, choose 1 to start the server.
-In the other window, choose 2 to start the client and connect to the server.
-"""
-
-choice = int(input("Do you want to host or connect... 1 or 2:\t"))
-
-if choice == 1:
-    yourIP = input("Enter your ip:\t")
-    server =socket.socket(socket.AF_INET, socket.SOCK_STREAM) #creates a tcp socket
-    server.bind((yourIP, 4433)) #create a server here
-    server.listen() #listen for a single connection
-    print("listening...")
-    client, _ = server.accept() #client is assigned the new connection (discards unneccesary stuff)
-    print("partner has joined...\n")
-elif choice ==2:
-    theirIP = input("Enter IP to connect to:\t")
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #creates a tcp socket
-    client.connect((theirIP, 4433)) #connect
-    print("connection successful\n")
-else:
-    exit()
+if choice == "1":
+    ip = simpledialog.askstring("Chat", "Enter your IP:")
+    port = int(simpledialog.askstring("Chat", "Enter your port:", parent=mainWindow))
+    tk.messagebox.showinfo(title=None, message='Chat attempt starting - when connected a new window will appear', parent=mainWindow)  
+    sock.bind((ip, port))
+    sock.listen()
+    print('waiting for connection')
+    sock, address = sock.accept()
+    print('connected')
+    #continue to line 48 and onward
     
+elif choice == "2":
+    ip = simpledialog.askstring("Chat", "Enter server IP:", parent=mainWindow)
+    port = int(simpledialog.askstring("Chat", "Enter server port:", parent=mainWindow))
+    tk.messagebox.showinfo(title=None, message='Chat attempt starting', parent=mainWindow)  
+    print('attempting connection')
+    sock.connect((ip, port))
+    print('connected')
+    #continue to line 48 and onward
+else:
+    tk.messagebox.showerror(title=None, message='Not Acceptable', parent=mainWindow)
+    sys.exit()
 
-#### sending messages through socket
-def sendMessage(client):
-    while True:
+######################################
+#GUI building and commands (functions)
+######################################
+mainWindow.deiconify()      #bring back mainWindow
+
+#Chat window
+chatWindow = tk.Text(mainWindow, state="disabled", height=20, width=50)
+chatWindow.pack(padx=10, pady=10)
+
+#Box to enter messages
+enterMessages = tk.Entry(mainWindow)
+enterMessages.pack()
+
+#Sending messages
+def sendMessage(event=None):                #only ran when command called (no need for seperate thread)
+    message = enterMessages.get()
+    enterMessages.delete(0, tk.END)         #delete eveything in the messagebox from index 0-tk.End()
+    if message.lower() == 'exit':
+        sock.send(message.encode())         #send exit message to peer
+        stop_event.set()                    #set exit signal so recv thread stops
+        return                              #finish function early (the sender of the exit signal will now have their own exit based on recv logic)
+    try:
+        if message:
+            sock.send(message.encode())
+            chatWindow.config(state='normal')
+            chatWindow.insert(tk.END, f"You> {message}\n")
+            chatWindow.config(state='disabled')
+    except:
+        tk.messagebox.showerror(title=None, message='Message Sending Error', parent=mainWindow)
+        sock.close()
+        mainWindow.destroy()
+        sys.exit()
+       
+#Sending logic
+sendButton = tk.Button(mainWindow, text="Send", command=sendMessage)
+enterMessages.bind("<Return>", sendMessage) #pressing enter sends messages
+
+#Recv messages
+#Note to self: 
+#Now we are dealing with threads so we must be careful
+#When it comes to gui related actions we want to make sure we run it in the context of the mainWindow (tk) thread and not the recvThread
+#For example -> mainWindow.after(0, lambda m=message: chatWindowInsert(m)) 
+#This waits to run gui actions within the main thread
+def recvMessage():                          #needs to be ran constantly and will need its own thread
+    while not stop_event.is_set():          #while the signal is not set continue to recieve data
         try:
-            message = input("")
-            if message == "exit":                
-                client.send(message.encode())
-                print("exit message sent to peer.. closing connection")
-                client.close()
-                sys.exit()
-            else:
-                client.send(message.encode())
-                print("You: "+ message )
+            data = sock.recv(1024)
+            message = data.decode()
+            if message.lower() == 'exit':
+                #mainWindow.after(0, lambda: tk.messagebox.showerror(title=None, message='Partner disconnected', parent=mainWindow))
+                mainWindow.after(0, on_closing)
+                break
+            mainWindow.after(0, lambda m=message: chatWindowInsert(m)) #calls from main thread
         except:
-            print("connection no longer established-> chat exited -> closing sending process")
+            mainWindow.after(0, lambda: tk.messagebox.showerror(title=None, message='Message Recv Error', parent=mainWindow))
+            mainWindow.after(0, on_closing)
             break
-        
-#### recving messages through socket
-def recvMessage(client):
-    while True:
-        try:
-            msg = client.recv(1024).decode()
-            if msg =="exit":
-                print("exit request recieved... from peer")
-                sys.exit()   
-        except:
-            print("connection no longer established-> chat exited -> closing recv process")
-            break
-        else:
-            print("partner>  " + msg)
-        
-        
-        
 
-## threading
-#each line below basically starts a function and passes args
-#when the entire code is run, all 3 sections of code are ran at once
-threading.Thread(target=sendMessage, args=(client,)).start()
-threading.Thread(target=recvMessage, args=(client,)).start()
+def chatWindowInsert(text):
+    chatWindow.config(state='normal')
+    chatWindow.insert(tk.END, f"Partner> {text}\n") #Insert this text at the end of the widget’s current content
+    chatWindow.config(state='disabled')
 
+def on_closing():           
+    try:
+        #this function should already be executing in main thread context when called (see line 98)
+        tk.messagebox.showerror(title=None, message='Partner disconnected', parent=mainWindow)
+        stop_event.set()        # tell thread to stop
+        sock.close()
+        recvThread.join()       #main thread must now wait for recv thread to end in order to die
+        mainWindow.destroy()    #destroy gui
+    except:
+        sys.exit()              #hard exit
 
-
-
-
-
-
-
-"""
-threading.Thread:
-
-This creates a new thread.
-The Thread class from the threading module is used to initialize and run a thread.
-Parameters:
-
-target: The function that the thread will execute.
-args: A tuple of arguments to pass to the target function.
-.start():
-
-This method starts the thread, running the target function in parallel with the main program.
-
-These two threads (sendMessage and recvMessage) run simultaneously and independently of the main thread.
-This allows the program to send and receive messages concurrently, improving responsiveness.
-
-each user has a sending thread and receving thread, both must be closed in order to exit.
-"""
+recvThread = threading.Thread(target=recvMessage, daemon=True)          #a daemon is a background thread that does not keep the program running on its own (if daemon threads are the only ones alive python still exits!)
+recvThread.start()
+mainWindow.mainloop()
